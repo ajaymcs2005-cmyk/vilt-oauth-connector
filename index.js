@@ -1,4 +1,4 @@
-require('dotenv').config();
+require("dotenv").config();
 
 // index.js
 const express = require("express");
@@ -28,13 +28,21 @@ app.post("/admin/config", admin.config);
 app.get("/admin/tokens", admin.tokens);
 
 // Functional (require Bearer token) — all POST with JSON bodies
-app.post("/api/createsession", protectedController.createSession);
-app.post("/api/updatesession", protectedController.updateSession);
-app.post("/api/cancelsession", protectedController.cancelSession);
+app.post("/api/session", protectedController.createSession);
+app.put("/api/session/:SessionId", protectedController.updateSession);
+app.delete("/api/session/:SessionId", protectedController.cancelSession);
 
 // New instructor endpoint
-app.post("/api/addinstructor", protectedController.addInstructor);
-app.post('/api/updateinstructor', protectedController.updateInstructor);
+app.post("/api/instructor", protectedController.addInstructor);
+app.put("/api/instructor", protectedController.updateInstructor);
+
+// New attendance endpoint
+app.get("/api/session/:SessionId/attendees", protectedController.getAttendance);
+// Launch attendance endpoint
+app.get(
+  "/api/session/:SessionId/user/:base64EncodedEmail/url",
+  protectedController.launchSession
+);
 
 // Dev server only (Vercel imports the app instead)
 if (process.env.VERCEL !== "1") {

@@ -15,6 +15,27 @@ function uuid() {
 function ok(status = "success") {
   return { status, correlationId: uuid(), timestamp: nowIso() };
 }
+function okAttendance(status = "success") {
+  return {
+    status,
+    correlationId: uuid(),
+    timestamp: nowIso(),
+    data: {
+      attendees: [{ email: "instructor@example.com" }],
+    },
+  };
+}
+function okLaunchSession(status = "success") {
+  return {
+    status,
+    correlationId: uuid(),
+    timestamp: nowIso(),
+    data: {
+      joinUrl: "https://example.com/session/join",
+    },
+  };
+}
+
 function err(code = 0, message = "error") {
   return {
     status: "error",
@@ -139,7 +160,7 @@ exports.updateSession = async (req, res) => {
   if (!ctx) return;
   const { coll, client } = ctx;
 
-  const body = req.body || {};
+  const body = req.params || {};
   const sessionId = body.SessionId && String(body.SessionId).trim();
   if (!sessionId) {
     return res.status(400).json(err(40010, "SessionId is required"));
@@ -183,7 +204,7 @@ exports.cancelSession = async (req, res) => {
   if (!ctx) return;
   const { coll, client } = ctx;
 
-  const body = req.body || {};
+  const body = req.params || {};
   const sessionId = body.SessionId && String(body.SessionId).trim();
   if (!sessionId) {
     return res.status(400).json(err(40020, "SessionId is required"));
@@ -221,7 +242,7 @@ exports.cancelSession = async (req, res) => {
  * Body = Instructor payload with fields like Email, FirstName, LastName, etc.
  * 200: { status, correlationId, timestamp }
  */
-exports.addInstructor = async (req, res) => {
+exports.addInstructorold = async (req, res) => {
   const ctx = await validateBearerToken(req, res);
   if (!ctx) return;
 
@@ -273,7 +294,7 @@ exports.addInstructor = async (req, res) => {
 /**
  * POST /api/updateinstructor
  */
-exports.updateInstructor = async (req, res) => {
+exports.updateInstructorold = async (req, res) => {
   const ctx = await validateBearerToken(req, res);
   if (!ctx) return;
 
@@ -325,4 +346,31 @@ exports.updateInstructor = async (req, res) => {
   } else {
     res.status(200).json(ok("success"));
   }
+};
+
+/**
+ * GET /api/session/{SessionId}/attendees
+ */
+exports.getAttendance = async (req, res) => {
+  res.status(200).json(okAttendance("success"));
+};
+
+/**
+ * GET /api/session/{SessionId}/user/{base64EncodedEmail}/url
+ */
+exports.launchSession = async (req, res) => {
+  res.status(200).json(okLaunchSession("success"));
+};
+
+/**
+ * GET /api/addInstructor
+ */
+exports.addInstructor = async (req, res) => {
+  res.status(200).json(ok("success"));
+};
+/**
+ * GET /api/updateInstructor
+ */
+exports.updateInstructor = async (req, res) => {
+  res.status(200).json(ok("success"));
 };
