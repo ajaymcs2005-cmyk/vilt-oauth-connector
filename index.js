@@ -11,7 +11,7 @@ const protectedController = require("./controllers/protectedController");
 
 const app = express();
 
-app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
+app.use(cors({ origin: "*", methods: ["GET", "POST", "PUT", "DELETE"] }));
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
@@ -27,18 +27,17 @@ app.get("/admin/metrics", admin.metrics);
 app.post("/admin/config", admin.config);
 app.get("/admin/tokens", admin.tokens);
 
-// Functional (require Bearer token) — all POST with JSON bodies
+// Session endpoints
 app.post("/api/session", protectedController.createSession);
 app.put("/api/session/:SessionId", protectedController.updateSession);
 app.delete("/api/session/:SessionId", protectedController.cancelSession);
 
-// New instructor endpoint
+// Instructor endpoints
 app.post("/api/instructor", protectedController.addInstructor);
 app.put("/api/instructor", protectedController.updateInstructor);
 
-// New attendance endpoint
+// Attendance and launch endpoints
 app.get("/api/session/:SessionId/attendees", protectedController.getAttendance);
-// Launch attendance endpoint
 app.get(
   "/api/session/:SessionId/user/:base64EncodedEmail/url",
   protectedController.launchSession

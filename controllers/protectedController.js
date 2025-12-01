@@ -12,23 +12,33 @@ function uuid() {
     : Math.random().toString(36).slice(2);
 }
 
-function ok(status = "success") {
-  return { status, correlationId: uuid(), timestamp: nowIso() };
+function getCorrelationId(req) {
+  return req.headers['correlationid'] || uuid();
 }
-function okAttendance(status = "success") {
+
+function ok(req, status = "success") {
+  return { 
+    status, 
+    correlationId: getCorrelationId(req), 
+    timestamp: nowIso() 
+  };
+}
+
+function okAttendance(req, status = "success") {
   return {
     status,
-    correlationId: uuid(),
+    correlationId: getCorrelationId(req),
     timestamp: nowIso(),
     data: {
       attendees: [{ email: "instructor@example.com" }],
     },
   };
 }
-function okLaunchSession(status = "success") {
+
+function okLaunchSession(req, status = "success") {
   return {
     status,
-    correlationId: uuid(),
+    correlationId: getCorrelationId(req),
     timestamp: nowIso(),
     data: {
       joinUrl: "https://example.com/session/join",
@@ -36,10 +46,10 @@ function okLaunchSession(status = "success") {
   };
 }
 
-function err(code = 0, message = "error") {
+function err(req, code = 0, message = "error") {
   return {
     status: "error",
-    correlationId: uuid(),
+    correlationId: getCorrelationId(req),
     timestamp: nowIso(),
     error: { code, message },
   };
@@ -66,7 +76,7 @@ async function validateBearerToken(req, res) {
   }
 
   if (!auth || !auth.startsWith("Bearer ")) {
-    res.status(401).json(err(40101, "missing_authorization"));
+    res.status(401).json(err(req, 40101, "missing_authorization"));
     return null;
   }
   const token = auth.slice("Bearer ".length).trim();
@@ -77,26 +87,26 @@ async function validateBearerToken(req, res) {
     const client = await findClientByToken(coll, token);
 
     if (!client || !client.currentToken) {
-      res.status(401).json(err(40102, "invalid_token"));
+      res.status(401).json(err(req, 40102, "invalid_token"));
       return null;
     }
 
     const expMs = client.tokenExpiresAt ? Date.parse(client.tokenExpiresAt) : 0;
     if (!Number.isFinite(expMs) || Date.now() > expMs) {
-      res.status(401).json(err(40103, "token_expired"));
+      res.status(401).json(err(req, 40103, "token_expired"));
       return null;
     }
 
     if (token !== client.currentToken) {
       // Old/rotated token
-      res.status(401).json(err(40104, "invalid_token"));
+      res.status(401).json(err(req, 40104, "invalid_token"));
       return null;
     }
 
     return { db, coll, client };
   } catch (e) {
     console.error("validateBearerToken failed:", e);
-    res.status(500).json(err(50001, "internal_validation_error"));
+    res.status(500).json(err(req, 50001, "internal_validation_error"));
     return null;
   }
 }
@@ -104,7 +114,7 @@ async function validateBearerToken(req, res) {
 // ---------- endpoints ----------
 
 /**
- * POST /api/createsession
+ * POST /api/session
  * Body = your full CreateSession payload. SessionId optional; generated if missing.
  * 200: { status, correlationId, timestamp }
  */
@@ -139,123 +149,139 @@ exports.createSession = async (req, res) => {
         },
         { upsert: true }
       );
-      // }
-      res.status(200).json(ok("success"));
+      res.status(200).json(ok(req, "success"));
     } catch (e) {
       console.error("createSession failed:", e);
-      res.status(500).json(err(50010, "create_session_failed"));
+      res.status(500).json(err(req, 50010, "create_session_failed"));
     }
   } else {
-    res.status(200).json(ok("success"));
+    res.status(200).json(ok(req, "success"));
   }
 };
 
 /**
- * POST /api/updatesession
- * Body must include { SessionId, ... } (can reuse same shape as create).
+ * PUT /api/session/{SessionId}
+ * Body must include session update payload.
  * 200: { status, correlationId, timestamp }
  */
 exports.updateSession = async (req, res) => {
   const ctx = await validateBearerToken(req, res);
   if (!ctx) return;
-  const { coll, client } = ctx;
 
-  const body = req.params || {};
-  const sessionId = body.SessionId && String(body.SessionId).trim();
+  const sessionId = req.params.SessionId && String(req.params.SessionId).trim();
   if (!sessionId) {
-    return res.status(400).json(err(40010, "SessionId is required"));
+    return res.status(400).json(err(req, 40010, "SessionId is required"));
   }
 
-  try {
-    const result = await coll.updateOne(
-      {
-        clientId: client.clientId,
-        clientSecret: client.clientSecret,
-        "sessions.sessionId": sessionId,
-      },
-      {
-        $set: {
-          "sessions.$.status": "updated",
-          "sessions.$.updatedAt": nowIso(),
-          "sessions.$.lastUpdateRequest": body,
+  //This condition added to handle basic auth
+  if (ctx != 1) {
+    const { coll, client } = ctx;
+    const body = req.body || {};
+
+    try {
+      const result = await coll.updateOne(
+        {
+          clientId: client.clientId,
+          clientSecret: client.clientSecret,
+          "sessions.sessionId": sessionId,
         },
-        $inc: { "perEndpointUsage.updatesession": 1 },
+        {
+          $set: {
+            "sessions.$.status": "updated",
+            "sessions.$.updatedAt": nowIso(),
+            "sessions.$.lastUpdateRequest": body,
+          },
+          $inc: { "perEndpointUsage.updatesession": 1 },
+        }
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json(err(req, 40410, "session_not_found"));
       }
-    );
 
-    if (result.matchedCount === 0) {
-      return res.status(404).json(err(40410, "session_not_found"));
+      res.status(200).json(ok(req, "success"));
+    } catch (e) {
+      console.error("updateSession failed:", e);
+      res.status(500).json(err(req, 50011, "update_session_failed"));
     }
-
-    res.status(200).json(ok("success"));
-  } catch (e) {
-    console.error("updateSession failed:", e);
-    res.status(500).json(err(50011, "update_session_failed"));
+  } else {
+    res.status(200).json(ok(req, "success"));
   }
 };
 
 /**
- * POST /api/cancelsession
- * Body must include { SessionId }.
+ * DELETE /api/session/{SessionId}
  * 200: { status, correlationId, timestamp }
  */
 exports.cancelSession = async (req, res) => {
   const ctx = await validateBearerToken(req, res);
   if (!ctx) return;
-  const { coll, client } = ctx;
 
-  const body = req.params || {};
-  const sessionId = body.SessionId && String(body.SessionId).trim();
+  const sessionId = req.params.SessionId && String(req.params.SessionId).trim();
   if (!sessionId) {
-    return res.status(400).json(err(40020, "SessionId is required"));
+    return res.status(400).json(err(req, 40020, "SessionId is required"));
   }
 
-  try {
-    const result = await coll.updateOne(
-      {
-        clientId: client.clientId,
-        clientSecret: client.clientSecret,
-        "sessions.sessionId": sessionId,
-      },
-      {
-        $set: {
-          "sessions.$.status": "canceled",
-          "sessions.$.updatedAt": nowIso(),
-          "sessions.$.cancelRequest": body,
-        },
-        $inc: { "perEndpointUsage.cancelsession": 1 },
-      }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).json(err(40420, "session_not_found"));
-    }
-
-    res.status(200).json(ok("success"));
-  } catch (e) {
-    console.error("cancelSession failed:", e);
-    res.status(500).json(err(50012, "cancel_session_failed"));
-  }
-};
-/**
- * POST /api/addinstructor
- * Body = Instructor payload with fields like Email, FirstName, LastName, etc.
- * 200: { status, correlationId, timestamp }
- */
-exports.addInstructorold = async (req, res) => {
-  const ctx = await validateBearerToken(req, res);
-  if (!ctx) return;
+  // Handle LoId query parameter
+  const loId = req.query.LoId;
 
   //This condition added to handle basic auth
   if (ctx != 1) {
     const { coll, client } = ctx;
 
-    const body = req.body || {};
-    const instructorId =
-      (body.InstructorId && String(body.InstructorId).trim()) ||
-      `inst_${client.clientId}_${Date.now().toString(36)}`;
-
     try {
+      const result = await coll.updateOne(
+        {
+          clientId: client.clientId,
+          clientSecret: client.clientSecret,
+          "sessions.sessionId": sessionId,
+        },
+        {
+          $set: {
+            "sessions.$.status": "canceled",
+            "sessions.$.updatedAt": nowIso(),
+            "sessions.$.cancelRequest": { SessionId: sessionId, LoId: loId },
+          },
+          $inc: { "perEndpointUsage.cancelsession": 1 },
+        }
+      );
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json(err(req, 40420, "session_not_found"));
+      }
+
+      res.status(200).json(ok(req, "success"));
+    } catch (e) {
+      console.error("cancelSession failed:", e);
+      res.status(500).json(err(req, 50012, "cancel_session_failed"));
+    }
+  } else {
+    res.status(200).json(ok(req, "success"));
+  }
+};
+
+/**
+ * POST /api/instructor
+ * Body = Instructor payload with required fields: Email, FirstName, LastName
+ * 200: { status, correlationId, timestamp }
+ */
+exports.addInstructor = async (req, res) => {
+  const ctx = await validateBearerToken(req, res);
+  if (!ctx) return;
+
+  const body = req.body || {};
+  
+  // Validate required fields
+  if (!body.Email || !body.FirstName || !body.LastName) {
+    return res.status(400).json(err(req, 40030, "Email, FirstName, and LastName are required"));
+  }
+
+  try {
+    // If ctx is not 1 (not using Basic auth), update the database
+    if (ctx !== 1) {
+      const { coll, client } = ctx;
+      const instructorId = `inst_${client.clientId}_${Date.now().toString(36)}`;
+
       await coll.updateOne(
         { clientId: client.clientId, clientSecret: client.clientSecret },
         {
@@ -266,11 +292,6 @@ exports.addInstructorold = async (req, res) => {
               email: body.Email,
               firstName: body.FirstName,
               lastName: body.LastName,
-              providerId: body.ProviderId,
-              integrationId: body.IntegrationId,
-              applicationProviderId: body.ApplicationProviderId,
-              tenantId: body.TenantId,
-              integrationName: body.IntegrationName,
               createdAt: nowIso(),
               updatedAt: nowIso(),
               status: "active",
@@ -280,54 +301,49 @@ exports.addInstructorold = async (req, res) => {
         },
         { upsert: true }
       );
-
-      res.status(200).json(ok("success"));
-    } catch (e) {
-      console.error("addInstructor failed:", e);
-      res.status(500).json(err(50013, "add_instructor_failed"));
     }
-  } else {
-    res.status(200).json(ok("success"));
+    
+    res.status(200).json(ok(req, "success"));
+  } catch (e) {
+    console.error("addInstructor failed:", e);
+    res.status(500).json(err(req, 50013, "add_instructor_failed"));
   }
 };
 
 /**
- * POST /api/updateinstructor
+ * PUT /api/instructor
+ * Body = Instructor payload with required fields: OldEmail, NewEmail, FirstName, LastName, IsActive
+ * 200: { status, correlationId, timestamp }
  */
-exports.updateInstructorold = async (req, res) => {
+exports.updateInstructor = async (req, res) => {
   const ctx = await validateBearerToken(req, res);
   if (!ctx) return;
 
-  //This condition added to handle basic auth
-  if (ctx != 1) {
-    const { coll, client } = ctx;
+  const body = req.body || {};
+  
+  // Validate required fields
+  if (!body.OldEmail || !body.NewEmail || !body.FirstName || !body.LastName || body.IsActive === undefined) {
+    return res.status(400).json(err(req, 40031, "OldEmail, NewEmail, FirstName, LastName, and IsActive are required"));
+  }
 
-    const body = req.body || {};
-    const instructorId = body.InstructorId && String(body.InstructorId).trim();
-
-    if (!instructorId) {
-      return res.status(400).json(err(40030, "InstructorId is required"));
-    }
-
-    try {
+  try {
+    // If ctx is not 1 (not using Basic auth), update the database
+    if (ctx !== 1) {
+      const { coll, client } = ctx;
+      
       const result = await coll.updateOne(
         {
           clientId: client.clientId,
           clientSecret: client.clientSecret,
-          "instructors.instructorId": instructorId,
+          "instructors.email": body.OldEmail,
         },
         {
           $set: {
-            "instructors.$.email": body.Email,
+            "instructors.$.email": body.NewEmail,
             "instructors.$.firstName": body.FirstName,
             "instructors.$.lastName": body.LastName,
-            "instructors.$.providerId": body.ProviderId,
-            "instructors.$.integrationId": body.IntegrationId,
-            "instructors.$.applicationProviderId": body.ApplicationProviderId,
-            "instructors.$.tenantId": body.TenantId,
-            "instructors.$.integrationName": body.IntegrationName,
+            "instructors.$.status": body.IsActive ? "active" : "inactive",
             "instructors.$.updatedAt": nowIso(),
-            "instructors.$.status": body.Status || "updated",
             "instructors.$.updateRequest": body,
           },
           $inc: { "perEndpointUsage.updateinstructor": 1 },
@@ -335,42 +351,81 @@ exports.updateInstructorold = async (req, res) => {
       );
 
       if (result.matchedCount === 0) {
-        return res.status(404).json(err(40430, "instructor_not_found"));
+        return res.status(404).json(err(req, 40430, "instructor_not_found"));
       }
-
-      res.status(200).json(ok("success"));
-    } catch (e) {
-      console.error("updateInstructor failed:", e);
-      res.status(500).json(err(50014, "update_instructor_failed"));
     }
-  } else {
-    res.status(200).json(ok("success"));
+    
+    res.status(200).json(ok(req, "success"));
+  } catch (e) {
+    console.error("updateInstructor failed:", e);
+    res.status(500).json(err(req, 50014, "update_instructor_failed"));
   }
 };
 
 /**
  * GET /api/session/{SessionId}/attendees
+ * 200: { status, correlationId, timestamp, data: { attendees: [{ email: string }] } }
  */
 exports.getAttendance = async (req, res) => {
-  res.status(200).json(okAttendance("success"));
+  const ctx = await validateBearerToken(req, res);
+  if (!ctx) return;
+
+  // Handle LoId query parameter
+  const loId = req.query.LoId;
+  
+  //This condition added to handle basic auth
+  if (ctx != 1) {
+    const { coll, client } = ctx;
+
+    try {
+      // You could add database operations here if needed
+      await coll.updateOne(
+        { clientId: client.clientId, clientSecret: client.clientSecret },
+        {
+          $inc: { "perEndpointUsage.getattendance": 1 },
+        },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error("getAttendance DB operation failed:", e);
+      // Continue anyway for this endpoint
+    }
+  }
+  
+  res.status(200).json(okAttendance(req, "success"));
 };
 
 /**
  * GET /api/session/{SessionId}/user/{base64EncodedEmail}/url
+ * 200: { status, correlationId, timestamp, data: { joinUrl: string } }
  */
 exports.launchSession = async (req, res) => {
-  res.status(200).json(okLaunchSession("success"));
-};
+  const ctx = await validateBearerToken(req, res);
+  if (!ctx) return;
 
-/**
- * GET /api/addInstructor
- */
-exports.addInstructor = async (req, res) => {
-  res.status(200).json(ok("success"));
-};
-/**
- * GET /api/updateInstructor
- */
-exports.updateInstructor = async (req, res) => {
-  res.status(200).json(ok("success"));
+  // Handle query parameters
+  const firstName = req.query.FirstName;
+  const lastName = req.query.LastName;
+  const loId = req.query.LoId;
+  
+  //This condition added to handle basic auth
+  if (ctx != 1) {
+    const { coll, client } = ctx;
+
+    try {
+      // You could add database operations here if needed
+      await coll.updateOne(
+        { clientId: client.clientId, clientSecret: client.clientSecret },
+        {
+          $inc: { "perEndpointUsage.launchsession": 1 },
+        },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error("launchSession DB operation failed:", e);
+      // Continue anyway for this endpoint
+    }
+  }
+  
+  res.status(200).json(okLaunchSession(req, "success"));
 };

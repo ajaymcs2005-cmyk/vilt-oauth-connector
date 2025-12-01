@@ -24,10 +24,29 @@ exports.reset = async (req, res) => {
     }
 
     const db = await getDb();
-    const result = await db.collection("clients").deleteOne({ clientId, clientSecret });
+    //update the document to keep only clientId, clientSecret
+    const result = await db.collection("clients").updateOne(
+      { clientId, clientSecret },
+      { 
+        $set: {
+          clientId,
+          clientSecret,
+           nextTokenTtlSeconds
+        },
+        $unset: {
+          tokenHits: "",
+          tokenRotations: "",
+          tokenExpiresAt: "",
+          perEndpointUsage: "",
+          currentToken: "",
+          issuedTokens: "",
+          sessions: ""
+        }
+      }
+    );
 
     return res.status(200).json({
-      message: result.deletedCount > 0 ? "reset ok" : "no data to reset",
+      message: result.matchedCount > 0 ? "reset ok" : "no data to reset",
       client_id: clientId
     });
   } catch (err) {
@@ -59,14 +78,8 @@ exports.metrics = async (req, res) => {
       {
         projection: {
           clientId: 1,
-          tokenHits: 1,
-          tokenRotations: 1,
-          tokenExpiresAt: 1,
-          nextTokenTtlSeconds: 1,
           perEndpointUsage: 1,
-          currentToken: 1,
-          issuedTokens: { $slice: -3 },
-          sessions: { $slice: -3 }
+          nextTokenTtlSeconds: 1,
         }
       }
     );
