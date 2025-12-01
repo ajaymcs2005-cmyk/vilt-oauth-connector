@@ -28,7 +28,14 @@ exports.issueToken = async (req, res) => {
   try {
     // Stateless fallback (no DB configured)
     if (!process.env.MONGODB_URI) {
-      const ttlSec = 1200;
+      const db = await getDb();
+      const coll = db.collection("clients");
+      
+      // Try to get nextTokenTtlSeconds from database, fallback to 1200
+      const doc = await coll.findOne({ clientId, clientSecret }, { projection: { nextTokenTtlSeconds: 1 } });
+      const ttlCandidate = doc?.nextTokenTtlSeconds;
+      const ttlSec = Number.isFinite(ttlCandidate) && ttlCandidate > 0 ? ttlCandidate : 1200;
+      
       const token = crypto.randomBytes(32).toString("base64url");
       return res.status(200).json({
         access_token: token,
@@ -112,7 +119,7 @@ exports.issueToken = async (req, res) => {
                 $map: {
                   input: "$issuedTokens",
                   as: "t",
-                  in: { $mergeObjects: ["$$t", { active: false }] },
+                  in: { $mergeObjects: ["$t", { active: false }] },
                 },
               },
               [],
